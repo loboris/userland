@@ -437,13 +437,14 @@ int vcsm_unlock_hdl_sp( unsigned int handle, int cache_no_flush );
 ** 2: clean            given virtual range in L1/L2
 ** 3: clean+invalidate given virtual range in L1/L2
 */
+#define VCSM_MAX_CLEAN_INVALIDATE_ENTRIES 8
 struct vcsm_user_clean_invalid_s {
    struct {
       unsigned int cmd;
       unsigned int handle;
       unsigned int addr;
       unsigned int size;
-   } s[8];
+   } s[VCSM_MAX_CLEAN_INVALIDATE_ENTRIES];
 };
 
 int vcsm_clean_invalid( struct vcsm_user_clean_invalid_s *s );
@@ -463,6 +464,8 @@ struct vcsm_user_clean_invalid2_s {
 int vcsm_clean_invalid2( struct vcsm_user_clean_invalid2_s *s );
 
 unsigned int vcsm_import_dmabuf( int dmabuf, char *name );
+
+int vcsm_export_dmabuf( unsigned int vcsm_handle );
 
 #ifdef __cplusplus
 }
