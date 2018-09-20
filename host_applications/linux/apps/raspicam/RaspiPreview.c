@@ -69,7 +69,7 @@ static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_com
  */
 MMAL_STATUS_T raspipreview_create(RASPIPREVIEW_PARAMETERS *state)
 {
-   MMAL_COMPONENT_T *preview = 0;
+   MMAL_COMPONENT_T *preview = NULL, *hvs = NULL;
    MMAL_PORT_T *preview_port = NULL;
    MMAL_STATUS_T status;
 
@@ -99,6 +99,15 @@ MMAL_STATUS_T raspipreview_create(RASPIPREVIEW_PARAMETERS *state)
       {
          status = MMAL_ENOSYS;
          vcos_log_error("No input ports found on component");
+         goto error;
+      }
+
+      status = mmal_component_create("vc.ril.hvs",
+            &hvs);
+
+      if (status != MMAL_SUCCESS)
+      {
+         vcos_log_error("Unable to create HVS component");
          goto error;
       }
 
@@ -143,8 +152,16 @@ MMAL_STATUS_T raspipreview_create(RASPIPREVIEW_PARAMETERS *state)
       vcos_log_error("Unable to enable preview/null sink component (%u)", status);
       goto error;
    }
+   status = mmal_component_enable(hvs);
+
+   if (status != MMAL_SUCCESS)
+   {
+      vcos_log_error("Unable to enable hvs component (%u)", status);
+      goto error;
+   }
 
    state->preview_component = preview;
+   state->preview_hvs_component = hvs;
 
    return status;
 
@@ -169,6 +186,11 @@ void raspipreview_destroy(RASPIPREVIEW_PARAMETERS *state)
    {
       mmal_component_destroy(state->preview_component);
       state->preview_component = NULL;
+   }
+   if (state->preview_hvs_component)
+   {
+      mmal_component_destroy(state->preview_hvs_component);
+      state->preview_hvs_component = NULL;
    }
 }
 

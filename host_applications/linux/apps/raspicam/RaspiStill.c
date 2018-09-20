@@ -161,7 +161,10 @@ typedef struct
    MMAL_COMPONENT_T *encoder_component;   /// Pointer to the encoder component
    MMAL_COMPONENT_T *null_sink_component; /// Pointer to the null sink component
    MMAL_CONNECTION_T *preview_connection; /// Pointer to the connection from camera to preview
+   MMAL_CONNECTION_T *preview_hvs_connection; /// Pointer to the connection from camera to preview
    MMAL_CONNECTION_T *encoder_connection; /// Pointer to the connection from camera to encoder
+
+   MMAL_POOL_T *hvs_overlay_pool; /// Pointer to the pool of buffers used by encoder output port
 
    MMAL_POOL_T *encoder_pool; /// Pointer to the pool of buffers used by encoder output port
 
@@ -1973,6 +1976,10 @@ void *gps_reader_process(void *gps_reader_data_ptr)
    return NULL;
 }
 
+static void overlay_cb(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
+{
+   mmal_buffer_header_release(buffer);
+}
 /**
  * main
  */
@@ -2112,6 +2119,7 @@ int main(int argc, const char **argv)
 
       if (! state.useGL)
       {
+         MMAL_ES_FORMAT_T *format;
          if (state.verbose)
             fprintf(stderr, "Connecting camera preview port to video render.\n");
 
@@ -2120,7 +2128,124 @@ int main(int argc, const char **argv)
          preview_input_port  = state.preview_parameters.preview_component->input[0];
 
          // Connect camera to preview (which might be a null_sink if no preview required)
-         status = connect_ports(camera_preview_port, preview_input_port, &state.preview_connection);
+         status = connect_ports(camera_preview_port, state.preview_parameters.preview_hvs_component->input[0], &state.preview_connection);
+         mmal_format_full_copy(state.preview_parameters.preview_hvs_component->output[0]->format, state.preview_parameters.preview_hvs_component->input[0]->format);
+         format = state.preview_parameters.preview_hvs_component->output[0]->format;
+         format->encoding = MMAL_ENCODING_BGRA;
+         format->es->video.crop.width = camera_preview_port->format->es->video.crop.width/2;
+         format->es->video.crop.height = camera_preview_port->format->es->video.crop.height/2;
+         format->es->video.width = VCOS_ALIGN_UP(format->es->video.crop.width, 32);
+         format->es->video.height = VCOS_ALIGN_UP(format->es->video.crop.height, 16);
+         format->es->video.crop.x = 0;
+         format->es->video.crop.y = 0;
+         status = mmal_port_format_commit(state.preview_parameters.preview_hvs_component->output[0]);
+         if (status != MMAL_SUCCESS)
+         {
+            vcos_log_error("%s: Failed to set HVS output", __func__);
+            goto error;
+         }
+         status = connect_ports(state.preview_parameters.preview_hvs_component->output[0], preview_input_port, &state.preview_hvs_connection);
+         if (status != MMAL_SUCCESS)
+         {
+            vcos_log_error("%s: Failed to connect hvs to render", __func__);
+            goto error;
+         }
+      }
+      {
+         MMAL_PORT_T *port = state.preview_parameters.preview_hvs_component->input[1];
+         MMAL_BUFFER_HEADER_T *buf;
+         MMAL_ES_FORMAT_T *format = port->format;
+         format->encoding = MMAL_ENCODING_BGRA;
+         format->es->video.crop.width = 2;
+         format->es->video.crop.height = 2;
+         format->es->video.width = VCOS_ALIGN_UP(format->es->video.crop.width, 32);
+         format->es->video.height = VCOS_ALIGN_UP(format->es->video.crop.height, 16);
+         format->es->video.crop.x = 0;
+         format->es->video.crop.y = 0;
+         status = mmal_port_format_commit(port);
+         if (status != MMAL_SUCCESS)
+         {
+            vcos_log_error("%s: Failed to set hvs overlay input", __func__);
+            goto error;
+         }
+
+         port->buffer_num = port->buffer_num_recommended;
+         port->buffer_size = port->buffer_size_recommended;
+         state.hvs_overlay_pool = mmal_port_pool_create(port, port->buffer_num, port->buffer_size);
+         if (!state.hvs_overlay_pool)
+         {
+            vcos_log_error("%s: Failed to create hvs overlay pool", __func__);
+            goto error;
+         }
+
+         MMAL_DISPLAYREGION_T param;
+         param.hdr.id = MMAL_PARAMETER_DISPLAYREGION;
+         param.hdr.size = sizeof(MMAL_DISPLAYREGION_T);
+
+         param.set |= MMAL_DISPLAY_SET_ALPHA;
+         param.alpha = 255;
+
+         param.set |= MMAL_DISPLAY_SET_FULLSCREEN;
+         param.fullscreen = 1;
+
+         param.set |= MMAL_DISPLAY_SET_DEST_RECT;
+         param.dest_rect.x = 100;
+         param.dest_rect.y = 100;
+         param.dest_rect.width = 100;
+         param.dest_rect.height = 100;
+
+         param.set |= MMAL_DISPLAY_SET_LAYER;
+         param.layer = 2;
+
+         status = mmal_port_parameter_set(port, &param.hdr);
+
+         if (status != MMAL_SUCCESS && status != MMAL_ENOSYS)
+         {
+            vcos_log_error("unable to set port display_region (%u)", status);
+            goto error;
+         }
+
+         param.dest_rect.x = 0;
+         param.dest_rect.y = 0;
+         param.dest_rect.width = 1024;
+         param.dest_rect.height = 768;
+
+         param.set |= MMAL_DISPLAY_SET_LAYER;
+         param.layer = 1;
+
+         param.set |= MMAL_DISPLAY_SET_ALPHA;
+         param.alpha = 255;
+         status = mmal_port_parameter_set(state.preview_parameters.preview_hvs_component->input[0], &param.hdr);
+
+         if (status != MMAL_SUCCESS && status != MMAL_ENOSYS)
+         {
+            vcos_log_error("unable to set port display_region (%u)", status);
+            goto error;
+         }
+
+         if (mmal_port_enable(port, overlay_cb) != MMAL_SUCCESS)
+         {
+            vcos_log_error("%s: Failed to enable hvs overlay port", __func__);
+            goto error;
+         }
+         buf = mmal_queue_get(state.hvs_overlay_pool->queue);
+         if (buf)
+         {
+            #define RGBA(r,g,b,a) ((r) | (g<<8) | (b<<16) | (a<<24))
+            uint32_t *pixels = (uint32_t*)buf->data;
+            memset(buf->data, 0xFF, 16*16*4);
+            pixels[0] = RGBA(255, 255, 0, 128);
+            pixels[1] = RGBA(0, 255, 0, 128);
+            pixels[format->es->video.width] = RGBA(0, 0,   255, 128);
+            pixels[(format->es->video.width) + 1] = RGBA(0, 255, 255, 128);
+            buf->length = port->buffer_size;
+
+            status = mmal_port_send_buffer(port, buf);
+            if (status != MMAL_SUCCESS)
+            {
+               vcos_log_error("%s: Failed to send overlay buffer", __func__);
+            }
+         }
       }
 
       if (status == MMAL_SUCCESS)
