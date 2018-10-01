@@ -1978,6 +1978,7 @@ void *gps_reader_process(void *gps_reader_data_ptr)
 
 static void overlay_cb(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 {
+   vcos_log_error("%s: buffer %p returned", __func__, buffer);
    mmal_buffer_header_release(buffer);
 }
 /**
@@ -2169,7 +2170,7 @@ int main(int argc, const char **argv)
             goto error;
          }
 
-         port->buffer_num = port->buffer_num_recommended;
+         port->buffer_num = 10; //port->buffer_num_recommended;
          port->buffer_size = port->buffer_size_recommended;
          state.hvs_overlay_pool = mmal_port_pool_create(port, port->buffer_num, port->buffer_size);
          if (!state.hvs_overlay_pool)
@@ -2228,23 +2229,41 @@ int main(int argc, const char **argv)
             vcos_log_error("%s: Failed to enable hvs overlay port", __func__);
             goto error;
          }
-         buf = mmal_queue_get(state.hvs_overlay_pool->queue);
-         if (buf)
+         int i = 0;
+         while((buf = mmal_queue_get(state.hvs_overlay_pool->queue)) != NULL)
          {
             #define RGBA(r,g,b,a) ((r) | (g<<8) | (b<<16) | (a<<24))
             uint32_t *pixels = (uint32_t*)buf->data;
+            int offset[] = { 0,
+                              1,
+                              (format->es->video.width),
+                              (format->es->video.width) + 1
+                           };
             memset(buf->data, 0xFF, 16*16*4);
-            pixels[0] = RGBA(255, 255, 0, 128);
-            pixels[1] = RGBA(0, 255, 0, 128);
-            pixels[format->es->video.width] = RGBA(0, 0,   255, 128);
-            pixels[(format->es->video.width) + 1] = RGBA(0, 255, 255, 128);
-            buf->length = port->buffer_size;
+            pixels[offset[(i+0)&3]] = RGBA(255, 255, 0, 128);
+            pixels[offset[(i+1)&3]] = RGBA(0, 255, 0, 128);
+            pixels[offset[(i+2)&3]] = RGBA(0, 0,   255, 128);
+            pixels[offset[(i+3)&3]] = RGBA(0, 255, 255, 128);
+            if ((i%5) == 2)
+               buf->length = 0;
+            else
+               buf->length = port->buffer_size;
+            buf->dts = 0;
+            if (!i)
+               buf->pts = 0;
+            else
+            {
+               status = mmal_port_parameter_get_int64(port, MMAL_PARAMETER_SYSTEM_TIME, &buf->pts);
+               buf->pts += i*1000000;
+            }
 
+            vcos_log_error("%s: Send buffer %p, pts %lld", __func__, buf, buf->pts);
             status = mmal_port_send_buffer(port, buf);
             if (status != MMAL_SUCCESS)
             {
                vcos_log_error("%s: Failed to send overlay buffer", __func__);
             }
+            i++;
          }
       }
 
