@@ -1781,7 +1781,7 @@ static MMAL_STATUS_T create_camera_component(RASPIVID_STATE *state)
         mmal_port_parameter_set(video_port, &fps_range.hdr);
    }
 
-   format->encoding = MMAL_ENCODING_OPAQUE;
+   format->encoding = MMAL_ENCODING_I420;
    format->es->video.width = VCOS_ALIGN_UP(state->width, 32);
    format->es->video.height = VCOS_ALIGN_UP(state->height, 16);
    format->es->video.crop.x = 0;
@@ -2046,7 +2046,7 @@ static MMAL_STATUS_T create_encoder_component(RASPIVID_STATE *state)
    MMAL_STATUS_T status;
    MMAL_POOL_T *pool;
 
-   status = mmal_component_create(MMAL_COMPONENT_DEFAULT_VIDEO_ENCODER, &encoder);
+   status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &encoder);
 
    if (status != MMAL_SUCCESS)
    {
@@ -2064,11 +2064,16 @@ static MMAL_STATUS_T create_encoder_component(RASPIVID_STATE *state)
    encoder_input = encoder->input[0];
    encoder_output = encoder->output[0];
 
+   status = mmal_port_parameter_set_boolean(encoder_output, MMAL_PARAMETER_EXIF_DISABLE, MMAL_TRUE);
+   status = mmal_port_parameter_set_uint32(encoder_output, MMAL_PARAMETER_JPEG_Q_FACTOR, 40);
+   MMAL_PARAMETER_THUMBNAIL_CONFIG_T param_thumb = {{MMAL_PARAMETER_THUMBNAIL_CONFIGURATION, sizeof(MMAL_PARAMETER_THUMBNAIL_CONFIG_T)}, 0, 0, 0, 0};
+   status = mmal_port_parameter_set(encoder->control, &param_thumb.hdr);
+
    // We want same format on input and output
    mmal_format_copy(encoder_output->format, encoder_input->format);
 
    // Only supporting H264 at the moment
-   encoder_output->format->encoding = state->encoding;
+   encoder_output->format->encoding = MMAL_ENCODING_JPEG; //state->encoding;
 
    if(state->encoding == MMAL_ENCODING_H264)
    {
