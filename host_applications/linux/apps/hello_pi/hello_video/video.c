@@ -37,10 +37,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 static int video_decode_test(char *filename)
 {
    OMX_VIDEO_PARAM_PORTFORMATTYPE format;
-   OMX_TIME_CONFIG_CLOCKSTATETYPE cstate;
-   COMPONENT_T *video_decode = NULL, *video_scheduler = NULL, *video_render = NULL, *clock = NULL;
-   COMPONENT_T *list[5];
-   TUNNEL_T tunnel[4];
+   COMPONENT_T *video_decode = NULL, *video_render = NULL;
+   COMPONENT_T *list[3];
+   TUNNEL_T tunnel[2];
    ILCLIENT_T *client;
    FILE *in;
    int status = 0;
@@ -75,33 +74,7 @@ static int video_decode_test(char *filename)
       status = -14;
    list[1] = video_render;
 
-   // create clock
-   if(status == 0 && ilclient_create_component(client, &clock, "clock", ILCLIENT_DISABLE_ALL_PORTS) != 0)
-      status = -14;
-   list[2] = clock;
-
-   memset(&cstate, 0, sizeof(cstate));
-   cstate.nSize = sizeof(cstate);
-   cstate.nVersion.nVersion = OMX_VERSION;
-   cstate.eState = OMX_TIME_ClockStateWaitingForStartTime;
-   cstate.nWaitMask = 1;
-   if(clock != NULL && OMX_SetParameter(ILC_GET_HANDLE(clock), OMX_IndexConfigTimeClockState, &cstate) != OMX_ErrorNone)
-      status = -13;
-
-   // create video_scheduler
-   if(status == 0 && ilclient_create_component(client, &video_scheduler, "video_scheduler", ILCLIENT_DISABLE_ALL_PORTS) != 0)
-      status = -14;
-   list[3] = video_scheduler;
-
-   set_tunnel(tunnel, video_decode, 131, video_scheduler, 10);
-   set_tunnel(tunnel+1, video_scheduler, 11, video_render, 90);
-   set_tunnel(tunnel+2, clock, 80, video_scheduler, 12);
-
-   // setup clock tunnel first
-   if(status == 0 && ilclient_setup_tunnel(tunnel+2, 0, 0) != 0)
-      status = -15;
-   else
-      ilclient_change_component_state(clock, OMX_StateExecuting);
+   set_tunnel(tunnel, video_decode, 131, video_render, 90);
 
    if(status == 0)
       ilclient_change_component_state(video_decode, OMX_StateIdle);
@@ -139,15 +112,6 @@ static int video_decode_test(char *filename)
             if(ilclient_setup_tunnel(tunnel, 0, 0) != 0)
             {
                status = -7;
-               break;
-            }
-
-            ilclient_change_component_state(video_scheduler, OMX_StateExecuting);
-
-            // now setup tunnel to video_render
-            if(ilclient_setup_tunnel(tunnel+1, 0, 1000) != 0)
-            {
-               status = -12;
                break;
             }
 
@@ -193,8 +157,6 @@ static int video_decode_test(char *filename)
    fclose(in);
 
    ilclient_disable_tunnel(tunnel);
-   ilclient_disable_tunnel(tunnel+1);
-   ilclient_disable_tunnel(tunnel+2);
    ilclient_disable_port_buffers(video_decode, 130, NULL, NULL, NULL);
    ilclient_teardown_tunnels(tunnel);
 
