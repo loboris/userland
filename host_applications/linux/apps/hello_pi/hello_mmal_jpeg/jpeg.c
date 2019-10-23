@@ -213,14 +213,17 @@ int main(int argc, char **argv)
 {
    MMAL_STATUS_T status = MMAL_EINVAL;
    MMAL_COMPONENT_T *decoder = NULL;
+   MMAL_COMPONENT_T *resize = NULL;
    MMAL_POOL_T *pool_in = NULL, *pool_out = NULL;
    MMAL_BOOL_T eos_sent = MMAL_FALSE, eos_received = MMAL_FALSE;
    unsigned int in_count = 0, out_count = 0;
    MMAL_BUFFER_HEADER_T *buffer;
+   MMAL_CONNECTION_T *connection = NULL;
 
-   if (argc < 2)
+   if (argc < 4)
    {
-      fprintf(stderr, "invalid arguments\n");
+      fprintf(stderr, "invalid arguments\n%s <filename> <input width> <input height> <output width> <output height>\n",
+            argv[0]);
       return -1;
    }
 
@@ -238,6 +241,9 @@ int main(int argc, char **argv)
     * know what kind of data it will be fed. */
    status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_DECODER, &decoder);
    CHECK_STATUS(status, "failed to create decoder");
+
+   status = mmal_component_create("vc.ril.isp", &resize);
+   CHECK_STATUS(status, "failed to create resize");
 
    /* Enable control port so we can receive events from the component */
    decoder->control->userdata = (void *)&context;
@@ -268,6 +274,14 @@ int main(int argc, char **argv)
 
    MMAL_ES_FORMAT_T *format_out = decoder->output[0]->format;
    format_out->encoding = MMAL_ENCODING_I420;
+   format_out->es->video.crop.width = atoi(argv[2]);
+   format_out->es->video.crop.height = atoi(argv[3]);
+   format_out->es->video.width = ALIGN_UP(format_out->es->video.crop.width, 32);
+   format_out->es->video.height = ALIGN_UP(format_out->es->video.crop.height, 16);
+   format_out->es->video.frame_rate.num = 0;
+   format_out->es->video.frame_rate.den = 1;
+   format_out->es->video.par.num = 1;
+   format_out->es->video.par.den = 1;
 
    status = mmal_port_format_commit(decoder->output[0]);
    CHECK_STATUS(status, "failed to commit format");
@@ -299,7 +313,7 @@ int main(int argc, char **argv)
 
    /* Store a reference to our context in each port (will be used during callbacks) */
    decoder->input[0]->userdata = (void *)&context;
-   decoder->output[0]->userdata = (void *)&context;
+   resize->output[0]->userdata = (void *)&context;
 
    /* Enable all the input port and the output port.
     * The callback specified here is the function which will be called when the buffer header
@@ -307,23 +321,47 @@ int main(int argc, char **argv)
    status = mmal_port_enable(decoder->input[0], input_callback);
    CHECK_STATUS(status, "failed to enable input port");
 
-   status = mmal_port_enable(decoder->output[0], output_callback);
+   status = mmal_connection_create(&connection, decoder->output[0], resize->input[0], MMAL_CONNECTION_FLAG_TUNNELLING);
+   CHECK_STATUS(status, "failed to create connection");
+
+   format_out = resize->output[0]->format;
+   format_out->encoding = MMAL_ENCODING_RGB24;
+   format_out->es->video.crop.width = atoi(argv[4]);
+   format_out->es->video.crop.height = atoi(argv[5]);
+   format_out->es->video.width = ALIGN_UP(format_out->es->video.crop.width, 32);
+   format_out->es->video.height = ALIGN_UP(format_out->es->video.crop.height, 16);
+   format_out->es->video.frame_rate.num = 0;
+   format_out->es->video.frame_rate.den = 1;
+   format_out->es->video.par.num = 1;
+   format_out->es->video.par.den = 1;
+
+   status = mmal_port_format_commit(resize->output[0]);
+   CHECK_STATUS(status, "failed to commit format");
+
+   status = mmal_connection_enable(connection);
+   CHECK_STATUS(status, "failed to create connection");
+
+   status = mmal_port_enable(resize->output[0], output_callback);
    CHECK_STATUS(status, "failed to enable output port");
 
-   pool_out = mmal_port_pool_create(decoder->output[0],
-                                decoder->output[0]->buffer_num,
-                                decoder->output[0]->buffer_size);
+   pool_out = mmal_port_pool_create(resize->output[0],
+                                resize->output[0]->buffer_num,
+                                resize->output[0]->buffer_size);
 
    while ((buffer = mmal_queue_get(pool_out->queue)) != NULL)
    {
       //printf("Sending buf %p\n", buffer);
-      status = mmal_port_send_buffer(decoder->output[0], buffer);
-      CHECK_STATUS(status, "failed to send output buffer to decoder");
+      status = mmal_port_send_buffer(resize->output[0], buffer);
+      CHECK_STATUS(status, "failed to send output buffer to resize");
    }
 
    /* Component won't start processing data until it is enabled. */
    status = mmal_component_enable(decoder);
    CHECK_STATUS(status, "failed to enable decoder component");
+
+   /* Component won't start processing data until it is enabled. */
+   status = mmal_component_enable(resize);
+   CHECK_STATUS(status, "failed to enable resize component");
 
    /* Start decoding */
    fprintf(stderr, "start decoding\n");
@@ -372,10 +410,11 @@ int main(int argc, char **argv)
             if (buffer->cmd == MMAL_EVENT_FORMAT_CHANGED)
             {
                MMAL_EVENT_FORMAT_CHANGED_T *event = mmal_event_format_changed_get(buffer);
+               fprintf(stderr, "FIXME: Need to tear down everything (or at least the connection) and reconnect at this stage\n");
                if (event)
                {
                   fprintf(stderr, "----------Port format changed----------\n");
-                  log_format(decoder->output[0]->format, decoder->output[0]);
+                  log_format(resize->output[0]->format, resize->output[0]);
                   fprintf(stderr, "-----------------to---------------------\n");
                   log_format(event->format, 0);
                   fprintf(stderr, " buffers num (opt %i, min %i), size (opt %i, min: %i)\n",
@@ -384,7 +423,7 @@ int main(int argc, char **argv)
                   fprintf(stderr, "----------------------------------------\n");
                }
                mmal_buffer_header_release(buffer);
-               mmal_port_disable(decoder->output[0]);
+               mmal_port_disable(resize->output[0]);
 
                //Clear out the queue and release the buffers.
                while(mmal_queue_length(pool_out->queue) < pool_out->headers_num)
@@ -396,22 +435,22 @@ int main(int argc, char **argv)
 
                //Assume we can't reuse the output buffers, so have to disable, destroy
                //pool, create new pool, enable port, feed in buffers.
-               mmal_port_pool_destroy(decoder->output[0], pool_out);
+               mmal_port_pool_destroy(resize->output[0], pool_out);
 
-               status = mmal_format_full_copy(decoder->output[0]->format, event->format);
-               decoder->output[0]->format->encoding = MMAL_ENCODING_I420;
-               decoder->output[0]->buffer_num = MAX_BUFFERS;
-               decoder->output[0]->buffer_size = decoder->output[0]->buffer_size_recommended;
+               status = mmal_format_full_copy(resize->output[0]->format, event->format);
+               resize->output[0]->format->encoding = MMAL_ENCODING_RGB24;
+               resize->output[0]->buffer_num = MAX_BUFFERS;
+               resize->output[0]->buffer_size = resize->output[0]->buffer_size_recommended;
 
                if (status == MMAL_SUCCESS)
-                  status = mmal_port_format_commit(decoder->output[0]);
+                  status = mmal_port_format_commit(resize->output[0]);
                if (status != MMAL_SUCCESS)
                {
                   fprintf(stderr, "commit failed on output - %d\n", status);
                }
 
-               mmal_port_enable(decoder->output[0], output_callback);
-               pool_out = mmal_port_pool_create(decoder->output[0], decoder->output[0]->buffer_num, decoder->output[0]->buffer_size);
+               mmal_port_enable(resize->output[0], output_callback);
+               pool_out = mmal_port_pool_create(resize->output[0], resize->output[0]->buffer_num, resize->output[0]->buffer_size);
             }
             else
             {
@@ -421,9 +460,17 @@ int main(int argc, char **argv)
          }
          else
          {
+            char filename[50];
+            FILE *file;
             fprintf(stderr, "decoded frame (flags %x, size %d) count %d\n", buffer->flags, buffer->length, out_count);
 
-            // Do something here with the content of the buffer
+            sprintf(filename, "%s.rgb", argv[1]);
+            file = fopen(filename, "wb");
+            if (file)
+            {
+               fwrite(buffer->data, buffer->length, 1, file);
+               fclose(file);
+            }
 
             mmal_buffer_header_release(buffer);
 
@@ -435,8 +482,8 @@ int main(int argc, char **argv)
       while ((buffer = mmal_queue_get(pool_out->queue)) != NULL)
       {
          //printf("Sending buf %p\n", buffer);
-         status = mmal_port_send_buffer(decoder->output[0], buffer);
-         CHECK_STATUS(status, "failed to send output buffer to decoder");
+         status = mmal_port_send_buffer(resize->output[0], buffer);
+         CHECK_STATUS(status, "failed to send output buffer to resize");
       }
    }
 
@@ -446,7 +493,8 @@ int main(int argc, char **argv)
    /* Stop everything. Not strictly necessary since mmal_component_destroy()
     * will do that anyway */
    mmal_port_disable(decoder->input[0]);
-   mmal_port_disable(decoder->output[0]);
+   mmal_port_disable(resize->output[0]);
+   mmal_component_disable(resize);
    mmal_component_disable(decoder);
 
  error:
@@ -454,7 +502,9 @@ int main(int argc, char **argv)
    if (pool_in)
       mmal_port_pool_destroy(decoder->input[0], pool_in);
    if (pool_out)
-      mmal_port_pool_destroy(decoder->output[0], pool_out);
+      mmal_port_pool_destroy(resize->output[0], pool_out);
+   if (resize)
+      mmal_component_destroy(resize);
    if (decoder)
       mmal_component_destroy(decoder);
    if (context.queue)
