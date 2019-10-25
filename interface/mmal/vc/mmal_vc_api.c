@@ -816,6 +816,8 @@ fail:
    mmal_vc_release_client_component(component);
    mmal_vc_shm_exit();
    mmal_vc_deinit();
+   mmal_vc_dump_client_components();
+   mmal_vc_dump_client_contexts();
    return status;
 }
 

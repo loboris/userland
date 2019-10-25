@@ -154,6 +154,24 @@ void mmal_vc_release_client_component(MMAL_COMPONENT_T *component)
    vcos_mutex_unlock(&client_component_pool.lock);
 }
 
+void mmal_vc_dump_client_components(void)
+{
+   int i;
+   int count = 0;
+
+   vcos_mutex_lock(&client_component_pool.lock);
+   for (i=0; i<MAX_COMPONENT_HANDLES; i++)
+   {
+      if (client_component_pool.components[i].inuse)
+      {
+         LOG_ERROR("%s: Entry %d in use for context %p", __func__, i, client_component_pool.components[i].component);
+         count++;
+      }
+   }
+   vcos_mutex_unlock(&client_component_pool.lock);
+   LOG_ERROR("%s: %u entries in use", __func__, count);
+}
+
 #define MAX_CLIENT_CONTEXTS 512
 
 typedef struct
@@ -226,6 +244,24 @@ void mmal_vc_release_client_context(MMAL_VC_CLIENT_BUFFER_CONTEXT_T *context)
       LOG_ERROR("Failed to release context %p - not found", context);
 
    vcos_mutex_unlock(&client_context_pool.lock);
+}
+
+void mmal_vc_dump_client_contexts(void)
+{
+   int i;
+   int count = 0;
+
+   vcos_mutex_lock(&client_context_pool.lock);
+   for (i=0; i<MAX_CLIENT_CONTEXTS; i++)
+   {
+      if (client_context_pool.contexts[i].inuse)
+      {
+         LOG_ERROR("%s: Entry %d in use for context %p", __func__, i, client_context_pool.contexts[i].ctx);
+         count++;
+      }
+   }
+   vcos_mutex_unlock(&client_context_pool.lock);
+   LOG_ERROR("%s: %u entries in use", __func__, count);
 }
 
 /* One client per process/VC connection. Multiple threads may

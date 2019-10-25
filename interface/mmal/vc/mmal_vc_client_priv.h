@@ -78,9 +78,11 @@ MMAL_STATUS_T mmal_vc_send_message(MMAL_CLIENT_T *client,
 
 uint32_t mmal_vc_allocate_client_component(MMAL_COMPONENT_T *component);
 void mmal_vc_release_client_component(MMAL_COMPONENT_T *component);
+void mmal_vc_dump_client_components(void);
 
 uint32_t mmal_vc_allocate_client_context(MMAL_VC_CLIENT_BUFFER_CONTEXT_T *context);
 MMAL_VC_CLIENT_BUFFER_CONTEXT_T *mmal_vc_lookup_client_context(int index);
 void mmal_vc_release_client_context(MMAL_VC_CLIENT_BUFFER_CONTEXT_T *context);
+void mmal_vc_dump_client_contexts(void);
 #endif
 
