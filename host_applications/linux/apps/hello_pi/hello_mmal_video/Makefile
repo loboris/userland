@@ -1,6 +1,6 @@
 OBJS=video.o
 BIN=hello_mmal_video.bin
-LDFLAGS+=-lvcsm -lmmal -lmmal_core -lmmal_util -lmmal_vc_client
+LDFLAGS+=-L$(SDKSTAGE)/opt/vc/lib/ -lvcsm -lmmal -lmmal_core -lmmal_util -lmmal_vc_client
 
-include ../Makefile.include
+include ../Makefile_base.include
 
