@@ -519,6 +519,18 @@ typedef struct mmal_worker_event_to_host
 } mmal_worker_event_to_host;
 vcos_static_assert(sizeof(mmal_worker_event_to_host) <= MMAL_WORKER_MAX_MSG_LEN);
 
+typedef struct mmal_worker_event_format_changed
+{
+   uint32_t buffer_size_min;         /**< Minimum size of buffers the port requires */
+   uint32_t buffer_num_min;          /**< Minimum number of buffers the port requires */
+   uint32_t buffer_size_recommended; /**< Size of buffers the port recommends for optimal performance.
+                                          A value of zero means no special recommendation. */
+   uint32_t buffer_num_recommended;  /**< Number of buffers the port recommends for optimal
+                                          performance. A value of zero means no special recommendation. */
+
+   uint32_t format;                  /**< New elementary stream format */
+} mmal_worker_event_format_changed;
+
 typedef struct
 {
    mmal_worker_msg_header header;
@@ -626,6 +638,18 @@ static inline void mmal_vc_msg_to_buffer_header(MMAL_BUFFER_HEADER_T *header,
    header->pts    = msg->buffer_header.pts;
    header->dts    = msg->buffer_header.dts;
    *header->type  = msg->buffer_header_type_specific;
+}
+
+static inline void mmal_vc_copy_es_format_from_vc(MMAL_VC_ES_FORMAT_T *src, MMAL_ES_FORMAT_T *dest)
+{
+   // IPC MMAL_VC_ES_FORMAT_T is not necessarily the same as MMAL_ES_FORMAT_T,
+   // so copy fields individually.
+   dest->type = src->type;
+   dest->encoding = src->encoding;
+   dest->encoding_variant = src->encoding_variant;
+   dest->bitrate = src->bitrate;
+   dest->flags = src->flags;
+   dest->extradata_size = src->extradata_size;
 }
 
 #endif

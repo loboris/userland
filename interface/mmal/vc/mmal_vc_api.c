@@ -954,18 +954,6 @@ static void mmal_vc_copy_es_format_to_vc(MMAL_ES_FORMAT_T *src, MMAL_VC_ES_FORMA
    dest->extradata_size = src->extradata_size;
 }
 
-static void mmal_vc_copy_es_format_from_vc(MMAL_VC_ES_FORMAT_T *src, MMAL_ES_FORMAT_T *dest)
-{
-   // IPC MMAL_VC_ES_FORMAT_T is not necessarily the same as MMAL_ES_FORMAT_T,
-   // so copy fields individually.
-   dest->type = src->type;
-   dest->encoding = src->encoding;
-   dest->encoding_variant = src->encoding_variant;
-   dest->bitrate = src->bitrate;
-   dest->flags = src->flags;
-   dest->extradata_size = src->extradata_size;
-}
-
 /** Get port context data. */
 static MMAL_STATUS_T mmal_vc_port_info_get(MMAL_PORT_T *port)
 {

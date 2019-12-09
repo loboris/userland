@@ -459,7 +459,51 @@ static void mmal_vc_handle_event_msg(VCHIQ_HEADER_T *vchiq_header,
    else
    {
       if (msg->length)
-         memcpy(buffer->data, msg->data, msg->length);
+      {
+         if (buffer->cmd == MMAL_EVENT_FORMAT_CHANGED && buffer->length >= msg->length)
+         {
+            //64bit userspace.
+            //No need to fix the pointers in the msg as mmal_event_format_changed_get
+            //will do that for us, but the start positions of each section does need
+            //to be adjusted.
+            mmal_worker_event_format_changed *fmt_changed_vc =
+                           (mmal_worker_event_format_changed*)msg->data;
+            MMAL_EVENT_FORMAT_CHANGED_T *fmt_changed_host =
+                           (MMAL_EVENT_FORMAT_CHANGED_T*)buffer->data;
+            MMAL_ES_FORMAT_T *fmt_host;
+            MMAL_VC_ES_FORMAT_T *fmt_vc;
+            MMAL_ES_SPECIFIC_FORMAT_T *es_host, *es_vc;
+            const uint32_t size_host = sizeof(MMAL_EVENT_FORMAT_CHANGED_T) +
+                                       sizeof(MMAL_ES_FORMAT_T) +
+                                       sizeof(MMAL_ES_SPECIFIC_FORMAT_T);
+            const uint32_t size_vc = sizeof(mmal_worker_event_format_changed) +
+                                     sizeof(MMAL_VC_ES_FORMAT_T) +
+                                     sizeof(MMAL_ES_SPECIFIC_FORMAT_T);
+
+            //Copy the base event (ignore the format pointer from the end)
+            memcpy(fmt_changed_host, fmt_changed_vc, sizeof(mmal_worker_event_format_changed));
+            fmt_changed_host->format = NULL;
+
+            //Copy the es format
+            fmt_vc = (MMAL_VC_ES_FORMAT_T *)&fmt_changed_vc[1];
+            fmt_host = (MMAL_ES_FORMAT_T *)&fmt_changed_host[1];
+            mmal_vc_copy_es_format_from_vc(fmt_vc, fmt_host);
+
+            //Copy the ES_SPECIFIC_FORMAT_T (structures are identical)
+            es_host = (MMAL_ES_SPECIFIC_FORMAT_T *)&fmt_host[1];
+            es_vc = (MMAL_ES_SPECIFIC_FORMAT_T *)&fmt_vc[1];
+            memcpy(es_host, es_vc, sizeof(MMAL_ES_SPECIFIC_FORMAT_T));
+
+            //Copy the extradata (if present)
+            fmt_host->extradata_size = msg->length - size_vc;
+            memcpy((uint8_t *)&es_host[1], (uint8_t*)&es_vc[1], fmt_host->extradata_size);
+            buffer->length = size_host + fmt_host->extradata_size;
+         }
+         else
+         {
+            memcpy(buffer->data, msg->data, msg->length);
+         }
+      }
 
       client_context->callback_event(port, buffer);
       LOG_DEBUG("done callback back to client");
