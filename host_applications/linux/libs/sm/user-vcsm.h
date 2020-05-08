@@ -147,6 +147,16 @@ typedef enum
 } VCSM_CACHE_TYPE_T;
 
 /* Initialize the vcsm processing with option to use vc-sm-cma which supports
+** dmabuf export, and passing in an external fd to /dev/vcsm-cma or /dev/vcsm,
+** and potentially the dma-heap for allocations.
+**
+** Must be called once before attempting to do anything else.
+**
+** Returns 0 on success, -1 on error.
+*/
+int vcsm_init_ex_ex( int want_export, int fd, int dma_heap_handle )
+
+/* Initialize the vcsm processing with option to use vc-sm-cma which supports
 ** dmabuf export, and passing in an external fd to /dev/vcsm-cma or /dev/vcsm.
 **
 ** Must be called once before attempting to do anything else.

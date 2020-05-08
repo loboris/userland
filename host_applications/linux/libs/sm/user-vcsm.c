@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <vmcs_sm_ioctl.h>
 #include "vc_sm_cma_ioctl.h"
+#include "dma-heap.h"
 #include "dma-buf.h"
 #include "user-vcsm.h"
 #include "interface/vcos/vcos.h"
@@ -50,6 +51,12 @@ typedef struct
 
 } VCSM_CACHE_MUTEX_LKUP_T;
 
+// /dev/dma-heap/linux,cma is the dma-heap allocator, which allows vcsm-cma to
+// only have to worry about importing.
+// Annoyingly, should the cma heap size be specified on the kernel command line
+// instead of DT, the heap gets named "reserved" instead.
+#define DMA_HEAP_CMA_NAME  "/dev/dma_heap/linux,cma"
+#define DMA_HEAP_CMA_ALT_NAME  "/dev/dma_heap/reserved"
 // /dev/vcsm-cma is the new device that is using CMA and importing it to the VPU.
 #define VCSM_CMA_DEVICE_NAME  "/dev/vcsm-cma"
 // /dev/vcsm is the older driver that maps gpu_mem into the ARM.
@@ -60,6 +67,7 @@ static VCOS_LOG_CAT_T usrvcsm_log_category;
 #define VCOS_LOG_CATEGORY (&usrvcsm_log_category)
 static int using_vc_sm_cma = 0;
 static int vcsm_handle = VCSM_INVALID_HANDLE;
+static int dma_heap_handle = -1;
 static int vcsm_refcount;
 static unsigned int vcsm_page_size = 0;
 
@@ -251,7 +259,7 @@ static void vcsm_init_once(void)
 **
 ** Returns 0 on success, -1 on error.
 */
-int vcsm_init_ex( int want_export, int fd )
+int vcsm_init_ex_ex( int want_export, int fd, int dma_heap_fd )
 {
    int result  = VCSM_INVALID_HANDLE;
    vcos_once(&vcsm_once, vcsm_init_once);
@@ -280,14 +288,24 @@ int vcsm_init_ex( int want_export, int fd )
       // FIXME: Sanity check which device that the fd actually relates to.
       // For now we have to guess based on whether export is requested.
       // (the main use case is from Chromium which will be requesting export).
-      if (want_export)
+      if (want_export) {
          using_vc_sm_cma = 1;
+
+         if (dma_heap_fd != -1)
+            dma_heap_fd = dup(dma_heap_handle);
+         else
+            dma_heap_fd = -1;
+      }
 
       goto out;
    }
 
    if (want_export)
    {
+      dma_heap_handle = open( DMA_HEAP_CMA_NAME, O_RDWR, 0 );
+      if (dma_heap_handle < 0)
+         dma_heap_handle = open( DMA_HEAP_CMA_ALT_NAME, O_RDWR, 0 );
+
       vcsm_handle = open( VCSM_CMA_DEVICE_NAME, O_RDWR, 0 );
 
       if (vcsm_handle >= 0)
@@ -337,6 +355,11 @@ out:
    return result;
 }
 
+int vcsm_init_ex( int want_export, int fd )
+{
+  return vcsm_init_ex_ex(want_export, fd, -1);
+}
+
 /* Initialize the vcsm processing.
 **
 ** Must be called once before attempting to do anything else.
@@ -345,7 +368,7 @@ out:
 */
 int vcsm_init( void )
 {
-  return vcsm_init_ex(0, -1);
+  return vcsm_init_ex_ex(0, -1, -1);
 }
 
 /* Terminates the vcsm processing.
@@ -420,48 +443,103 @@ unsigned int vcsm_malloc_cache( unsigned int size, VCSM_CACHE_TYPE_T cache, cons
 
    if (using_vc_sm_cma)
    {
-      struct vc_sm_cma_ioctl_alloc alloc;
       VCSM_PAYLOAD_ELEM_T *payload;
+      int fd;
+      uint32_t vc_handle;
+      uint64_t dma_addr;
 
-      memset( &alloc, 0, sizeof(alloc));
-
-      alloc.size   = size_aligned;
-      alloc.num    = 1;
-      alloc.cached = (enum vmcs_sm_cache_e) cache;   /* Convenient one to one mapping. */
-      alloc.handle = 0;
-      if ( name != NULL )
+      if (dma_heap_handle >= 0)
       {
-         memcpy ( alloc.name, name, 32 );
+         struct dma_heap_allocation_data alloc = {
+               .len = size_aligned,
+               .fd_flags = O_CLOEXEC,
+         };
+         struct vc_sm_cma_ioctl_import_dmabuf import = {0};
+
+         rc = ioctl( dma_heap_handle,
+                     DMA_HEAP_IOCTL_ALLOC,
+                     &alloc );
+         if (rc < 0)
+         {
+            vcos_log_error( "[%s]: [%d] [%s]: ioctl DMA_HEAP_IOCTL_ALLOC FAILED [%d]",
+                            __func__,
+                            getpid(),
+                            name,
+                            rc);
+            return 0;
+         }
+
+         /* Map the buffer on videocore via the VCSM (Videocore Shared Memory) interface. */
+         import.dmabuf_fd = alloc.fd;
+         import.cached = VMCS_SM_CACHE_NONE; //Support no caching for now - makes it easier for cache management
+         if ( name != NULL )
+         {
+            memcpy ( import.name, name, 32 );
+         }
+         rc = ioctl( vcsm_handle,
+                     VC_SM_CMA_IOCTL_MEM_IMPORT_DMABUF,
+                     &import );
+         if (rc < 0)
+         {
+            vcos_log_error( "[%s]: [%d] [%s]: ioctl VC_SM_CMA_IOCTL_MEM_IMPORT_DMABUF FAILED [%d]",
+                            __func__,
+                            getpid(),
+                            name,
+                            rc);
+            close(alloc.fd);
+            return 0;
+         }
+         fd = import.handle;
+         vc_handle = import.vc_handle;
+         dma_addr = import.dma_addr;
       }
-      rc = ioctl( vcsm_handle,
-                  VC_SM_CMA_IOCTL_MEM_ALLOC,
-                  &alloc );
-
-      if ( rc < 0 || alloc.handle < 0 )
+      else
       {
-         vcos_log_error( "[%s]: [%d] [%s]: ioctl mem-alloc FAILED [%d] (hdl: %x)",
+         struct vc_sm_cma_ioctl_alloc alloc;
+
+         memset( &alloc, 0, sizeof(alloc));
+
+         alloc.size   = size_aligned;
+         alloc.num    = 1;
+         alloc.cached = (enum vmcs_sm_cache_e) cache;   /* Convenient one to one mapping. */
+         alloc.handle = 0;
+         if ( name != NULL )
+         {
+            memcpy ( alloc.name, name, 32 );
+         }
+         rc = ioctl( vcsm_handle,
+                     VC_SM_CMA_IOCTL_MEM_ALLOC,
+                     &alloc );
+
+         if ( rc < 0 || alloc.handle < 0 )
+         {
+            vcos_log_error( "[%s]: [%d] [%s]: ioctl mem-alloc FAILED [%d] (hdl: %x)",
+                            __func__,
+                            getpid(),
+                            alloc.name,
+                            rc,
+                            alloc.handle );
+            return 0;
+         }
+
+         vcos_log_trace( "[%s]: [%d] [%s]: ioctl mem-alloc %d (hdl: %x)",
                          __func__,
                          getpid(),
                          alloc.name,
                          rc,
                          alloc.handle );
-         return 0;
+         fd = alloc.handle;
+         vc_handle = alloc.vc_handle;
+         dma_addr = alloc.dma_addr;
       }
-
-      vcos_log_trace( "[%s]: [%d] [%s]: ioctl mem-alloc %d (hdl: %x)",
-                      __func__,
-                      getpid(),
-                      alloc.name,
-                      rc,
-                      alloc.handle );
 
       /* Map the buffer into user space.
       */
       usr_ptr = mmap( 0,
-                      alloc.size,
+                      size_aligned,
                       PROT_READ | PROT_WRITE,
                       MAP_SHARED,
-                      alloc.handle,
+                      fd,
                       0 );
 
       if ( usr_ptr == MAP_FAILED )
@@ -469,15 +547,15 @@ unsigned int vcsm_malloc_cache( unsigned int size, VCSM_CACHE_TYPE_T cache, cons
          vcos_log_error( "[%s]: [%d]: mmap FAILED (hdl: %x)",
                       __func__,
                       getpid(),
-                      alloc.handle );
-         vcsm_free( alloc.handle );
+                      fd );
+         vcsm_free( fd );
          return 0;
       }
 
       // vc-sm-cma now hands out file handles (signed int), whilst libvcsm is
       // handling unsigned int handles. Already checked the handle >=0, so
       // add one to make it a usable handle.
-      handle = alloc.handle + 1;
+      handle = fd + 1;
 
       vcos_log_trace( "[%s]: mmap to %p",
                       __func__,
@@ -486,17 +564,17 @@ unsigned int vcsm_malloc_cache( unsigned int size, VCSM_CACHE_TYPE_T cache, cons
 
       payload = vcsm_payload_list_get();
       payload->handle = handle;
-      payload->fd = alloc.handle;
-      payload->vc_handle = alloc.vc_handle;
+      payload->fd = fd;
+      payload->vc_handle = vc_handle;
       payload->mem = usr_ptr;
       payload->size = size_aligned;
-      if (alloc.dma_addr & 0xFFFFFFFF00000000ULL)
+      if (dma_addr & 0xFFFFFFFF00000000ULL)
       {
-         vcos_log_error("[%s]: dma address returned > 32bit 0x%llx", __func__, alloc.dma_addr);
+         vcos_log_error("[%s]: dma address returned > 32bit 0x%llx", __func__, dma_addr);
          payload->dma_addr = 0;
       }
       else
-         payload->dma_addr = (uint32_t)alloc.dma_addr;
+         payload->dma_addr = (uint32_t)dma_addr;
    }
    else
    {
