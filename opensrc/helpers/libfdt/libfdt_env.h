@@ -7,7 +7,11 @@
  * Copyright 2012 Kim Phillips, Freescale Semiconductor.
  */
 
+#ifdef __VIDEOCORE__
+#include <vcos_stdbool.h>
+#else
 #include <stdbool.h>
+#endif
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -26,7 +30,14 @@ typedef uint16_t FDT_BITWISE fdt16_t;
 typedef uint32_t FDT_BITWISE fdt32_t;
 typedef uint64_t FDT_BITWISE fdt64_t;
 
-#define EXTRACT_BYTE(x, n)	((unsigned long long)((uint8_t *)&x)[n])
+//#define EXTRACT_BYTE(x, n)	((unsigned long long)((uint8_t *)&x)[n])
+// xxx work around a compiler bug...
+#define EXTRACT_BYTE(x, n)	EXTRACT_BYTE_f(&x, n)
+static inline unsigned long long EXTRACT_BYTE_f(void *x, int n)
+{
+	return ((uint8_t *)x)[n];
+}
+
 #define CPU_TO_FDT16(x) ((EXTRACT_BYTE(x, 0) << 8) | EXTRACT_BYTE(x, 1))
 #define CPU_TO_FDT32(x) ((EXTRACT_BYTE(x, 0) << 24) | (EXTRACT_BYTE(x, 1) << 16) | \
 			 (EXTRACT_BYTE(x, 2) << 8) | EXTRACT_BYTE(x, 3))
@@ -73,6 +84,21 @@ static inline fdt64_t cpu_to_fdt64(uint64_t x)
 # if !defined(MAC_OS_X_VERSION_10_7) || (MAC_OS_X_VERSION_MAX_ALLOWED < \
                                          MAC_OS_X_VERSION_10_7)
 
+#define __NEED_STRNLEN__
+
+#endif /* !defined(MAC_OS_X_VERSION_10_7) || (MAC_OS_X_VERSION_MAX_ALLOWED <
+          MAC_OS_X_VERSION_10_7) */
+
+#endif /* __APPLE__ */
+
+#ifdef __VIDEOCORE__
+
+#define __NEED_STRNLEN__
+
+#endif
+
+#ifdef __NEED_STRNLEN__
+
 #define strnlen fdt_strnlen
 
 /*
@@ -88,9 +114,6 @@ static inline size_t fdt_strnlen(const char *string, size_t max_count)
     return p ? p - string : max_count;
 }
 
-#endif /* !defined(MAC_OS_X_VERSION_10_7) || (MAC_OS_X_VERSION_MAX_ALLOWED <
-          MAC_OS_X_VERSION_10_7) */
-
-#endif /* __APPLE__ */
+#endif
 
 #endif /* LIBFDT_ENV_H */

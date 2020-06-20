@@ -1,0 +1,15 @@
+Source: userland
+Section: utils
+Priority: optional
+Maintainer: LoBo <loboris@gmail.com>
+Standards-Version: 4.3.0
+Vcs-Browser: https://github.com/raspberrypi/userland
+Build-Depends: debhelper (>= 8.0.0)
+
+Package: userland
+Architecture: arm64
+Depends: 
+Version: 20200515-1
+Description: Raspberry Pi userland applications
+ ARM side code to interface to:
+ EGL, mmal, GLESv2, vcos, openmaxil, vchiq_arm, bcm_host, WFC, OpenVG.

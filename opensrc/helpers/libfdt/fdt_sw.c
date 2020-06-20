@@ -199,7 +199,7 @@ int fdt_add_reservemap_entry(void *fdt, uint64_t addr, uint64_t size)
 
 int fdt_finish_reservemap(void *fdt)
 {
-	int err = fdt_add_reservemap_entry(fdt, 0, 0);
+	int err = fdt_add_reservemap_entry(fdt, 0LL, 0LL);
 
 	if (err)
 		return err;

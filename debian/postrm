@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -e
+
+if [ "$1" = "remove" ]; then
+    if [ -f /etc/ld.so.conf.d/vc.conf ]; then
+        rm -f /etc/ld.so.conf.d/vc.conf
+        ldconfig
+    fi
+    _files="dtmerge dtoverlay dtoverlay-post dtoverlay-pre dtparam tvservice vcgencmd vchiq_test vcmailbox"
+    for f in $_files
+    do
+        rm -f /bin/$f
+    done
+fi
+
+exit 0

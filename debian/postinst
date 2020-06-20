@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -e
+
+if [ "$1" = "configure" ]; then
+    echo '/opt/vc/lib' > /etc/ld.so.conf.d/vc.conf
+    ldconfig
+
+    _files="dtmerge dtoverlay dtoverlay-post dtoverlay-pre tvservice vcgencmd vchiq_test vcmailbox"
+    for f in $_files
+    do
+        ln -s /opt/vc/bin/$f /bin/$f
+    done
+    ln -s /opt/vc/bin/dtoverlay /bin/dtparam
+fi
+
+exit 0

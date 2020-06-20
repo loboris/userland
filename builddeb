@@ -1,0 +1,155 @@
+#!/bin/bash
+
+
+SCRIPT_DIR=${PWD}
+
+mkdir -p build
+rm -rf build/*
+
+FORCE_BUILD="${1}"
+
+INST_DIR=${PWD}/debpkg
+rm -rf ${INST_DIR}/*
+mkdir -p ${INST_DIR}/usr
+mkdir -p ${INST_DIR}/debian
+
+cp -r debian/* ${INST_DIR}/debian
+
+_exitcode_=0
+_LOGFILE="${PWD}/build.log"
+_aarch="$(uname -m)"
+
+#-------------------------------------------------------
+proc_exec_wait() {
+    local spin='-\|/'
+    local i=0
+    local _excode=0
+
+    rm _exitcode_ > /dev/null 2>&1
+
+    ( ( ${1} >> $_LOGFILE 2>&1; echo $? > _exitcode_ ) &)
+
+    printf "\033[33m\033[1m"
+    # wait for command process to finish
+    while [ ! -f _exitcode_ ]
+    do
+        i=$(( (i+1) %4 ))
+        printf "\r%s" "please wait ${spin:$i:1}"
+        sleep .1
+    done
+    _excode=$(cat _exitcode_)
+    rm _exitcode_ > /dev/null 2>&1
+
+    printf "\033[22m\033[0m"
+    printf "\r                            \r"
+    _exitcode_=${_excode}
+}
+#-------------------------------------------------------
+
+echo ""
+echo "**********************************************"
+echo "* Build 'userland' and create debian package *"
+echo "**********************************************"
+
+#Check if pull is needed
+
+if [ "${CHECK_REPO}" = "yes" ]; then
+    _current=$(git rev-parse @)
+    _remote=$(git ls-remote origin -h refs/heads/master |  awk '{print $1;}')
+
+    if [ "${_current}" = "${_remote}" ]; then
+        echo ""
+        echo "No new version available"
+        if [ ! "${FORCE_BUILD}" = "force" ]; then
+            exit 0
+        fi
+    else
+        echo ""
+        echo "Updating (git pull)..."
+        proc_exec_wait "git pull"
+        if [ "$_exitcode_" -ne 0 ]; then
+            echo "git pull error."
+            exit 1
+        fi
+    fi
+fi
+
+cd build
+
+CMAKE_TOOLCHAIN_FILE=""
+if [ ! "${_aarch}" = "aarch64" ]; then
+    CMAKE_TOOLCHAIN_FILE="-DCMAKE_TOOLCHAIN_FILE=../makefiles/cmake/toolchains/aarch64-linux-gnu.cmake"
+fi
+
+echo ""
+echo "cmake..."
+proc_exec_wait "cmake $CMAKE_TOOLCHAIN_FILE -DCMAKE_BUILD_TYPE=Release -DARM64=ON .."
+if [ $_exitcode_ -ne 0 ]; then
+    echo "cmake error."
+    exit 1
+fi
+
+echo ""
+echo "make..."
+proc_exec_wait "make -j4"
+if [ $_exitcode_ -ne 0 ]; then
+    echo "make error."
+    exit 1
+fi
+
+# This will install files in 'debpkg/opt/vc'
+echo ""
+echo "make install..."
+proc_exec_wait "make install DESTDIR=${INST_DIR}"
+if [ $_exitcode_ -ne 0 ]; then
+    echo "make install error."
+    exit 1
+fi
+
+# Create debian package
+#cp -R ${INST_DIR}/opt/vc/* ${INST_DIR}/usr
+#rm -rf ${INST_DIR}/opt
+
+cd ${SCRIPT_DIR}
+
+rm userland_*.deb > /dev/null 2>&1
+rm userland_*.build* > /dev/null 2>&1
+rm userland_*.changes > /dev/null 2>&1
+rm userland*.ddeb > /dev/null 2>&1
+
+cd ${INST_DIR}
+VER=$( LANG=en_us_88591; date +%Y%m%d%H%M )
+
+echo "userland (${VER}) raspi; urgency=low" > debian/changelog
+echo "" >> debian/changelog
+echo "  * Raspberry Pi 4 userland apps. (Closes: #XXXXXX)" >> debian/changelog
+echo "" >> debian/changelog
+echo " -- LoBo <lobo@loboris.eu>  $( LANG=en_us_88591; date -R )" >> debian/changelog
+
+
+
+echo ""
+echo "Creating debian package"
+proc_exec_wait "debuild --no-lintian -i -us -uc -b -aarm64"
+if [ $_exitcode_ -ne 0 ]; then
+    echo "debuild error."
+    exit 1
+fi
+
+cd ${SCRIPT_DIR}
+
+DEB_NAME=$(ls userland_*.deb)
+if [ ! "${DEB_NAME}" = "" ] && [ -f "${DEB_NAME}" ]; then
+    mv ${DEB_NAME} userland.deb
+    echo ""
+    echo "Debian package 'userland.deb' created."
+    rm userland_*.build* > /dev/null 2>&1
+    rm userland_*.changes > /dev/null 2>&1
+    rm userland*.ddeb > /dev/null 2>&1
+    rm -rf build > /dev/null 2>&1
+    rm -rf debpkg > /dev/null 2>&1
+    #rm "$_LOGFILE" > /dev/null 2>&1
+else
+    echo ""
+    echo "Debian package not created ('${DEB_NAME}')"
+fi

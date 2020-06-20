@@ -7,6 +7,7 @@
 
 #include <fdt.h>
 #include <libfdt.h>
+#include <string.h>
 
 #include "libfdt_internal.h"
 
@@ -388,7 +389,7 @@ static const struct fdt_property *fdt_get_property_namelen_(const void *fdt,
 	     (offset = fdt_next_property_offset(fdt, offset))) {
 		const struct fdt_property *prop;
 
-		if (!(prop = fdt_get_property_by_offset_(fdt, offset, lenp))) {
+		if ((prop = fdt_get_property_by_offset_(fdt, offset, lenp)) == 0) {
 			offset = -FDT_ERR_INTERNAL;
 			break;
 		}
@@ -446,7 +447,7 @@ const void *fdt_getprop_namelen(const void *fdt, int nodeoffset,
 	/* Handle realignment */
 	if (fdt_version(fdt) < 0x10 && (poffset + sizeof(*prop)) % 8 &&
 	    fdt32_ld(&prop->len) >= 8)
-		return prop->data + 4;
+		return (const char *)prop->data + 4;
 	return prop->data;
 }
 
@@ -474,7 +475,7 @@ const void *fdt_getprop_by_offset(const void *fdt, int offset,
 	/* Handle realignment */
 	if (fdt_version(fdt) < 0x10 && (offset + sizeof(*prop)) % 8 &&
 	    fdt32_ld(&prop->len) >= 8)
-		return prop->data + 4;
+		return (const char *)prop->data + 4;
 	return prop->data;
 }
 
@@ -805,8 +806,10 @@ int fdt_node_check_compatible(const void *fdt, int nodeoffset,
 	prop = fdt_getprop(fdt, nodeoffset, "compatible", &len);
 	if (!prop)
 		return len;
-
-	return !fdt_stringlist_contains(prop, len, compatible);
+	if (fdt_stringlist_contains(prop, len, compatible))
+		return 0;
+	else
+		return 1;
 }
 
 int fdt_node_offset_by_compatible(const void *fdt, int startoffset,
